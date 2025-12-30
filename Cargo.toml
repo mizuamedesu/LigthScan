@@ -1,0 +1,49 @@
+[package]
+name = "lightscan"
+version = "0.1.0"
+edition = "2021"
+authors = ["LightScan Contributors"]
+description = "High-performance memory scanner written in Rust"
+license = "MIT"
+
+[dependencies]
+# GUI
+eframe = "0.31"
+egui = "0.31"
+
+# Windows API
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Memory",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_Security",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+]}
+
+# 並列処理
+rayon = "1.10"
+
+# シリアライズ
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# エラー処理
+thiserror = "1.0"
+anyhow = "1.0"
+
+# ログ
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 1
