@@ -2,7 +2,6 @@
 // GUI version using eframe/egui
 
 use eframe::egui;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 struct GameState {
