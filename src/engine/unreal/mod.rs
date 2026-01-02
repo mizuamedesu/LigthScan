@@ -267,23 +267,17 @@ impl GameEngine for UnrealEngine {
         self.enumerate_methods_impl(class.0)
     }
 
-    fn find_field(&self, _class: ClassHandle, _name: &str) -> Result<FieldHandle> {
-        // TODO: UProperty を探す
-        Err(EngineError::FieldNotFound(_name.to_string()))
+    fn find_field(&self, class: ClassHandle, name: &str) -> Result<FieldHandle> {
+        let field_addr = self.find_field_impl(class.0, name)?;
+        Ok(FieldHandle(field_addr))
     }
 
-    fn get_field_info(&self, _field: FieldHandle) -> Result<FieldInfo> {
-        // TODO: UProperty から情報を読み取る
-        Err(EngineError::UnsupportedOperation(
-            "Field info reading not implemented".into(),
-        ))
+    fn get_field_info(&self, field: FieldHandle) -> Result<FieldInfo> {
+        self.get_field_info_impl(field.0)
     }
 
-    fn enumerate_fields(&self, _class: ClassHandle) -> Result<Vec<FieldInfo>> {
-        // TODO: UClass の全 UProperty を列挙
-        Err(EngineError::UnsupportedOperation(
-            "Field enumeration not implemented".into(),
-        ))
+    fn enumerate_fields(&self, class: ClassHandle) -> Result<Vec<FieldInfo>> {
+        self.enumerate_fields_impl(class.0)
     }
 
     fn get_instances(&self, _class: ClassHandle) -> Result<Vec<InstanceHandle>> {

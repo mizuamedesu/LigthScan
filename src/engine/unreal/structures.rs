@@ -298,29 +298,121 @@ impl FUObjectArray {
 }
 
 /// UField - メタデータの基底
+/// UE5.5: UObject を継承し、Next ポインタを追加
 #[repr(C)]
 pub struct UField {
     // UObject を継承 (省略)
-    pub next: usize, // UField*
+    pub next: usize, // UField* - 次の UField へのポインタ
 }
 
 /// UStruct - 構造化された型情報
+/// UE5.5 のレイアウト:
+/// - UObject (40 bytes): vtable(8) + flags(4) + index(4) + class(8) + name(8) + outer(8)
+/// - UField::Next (8 bytes) at offset 40
+/// - SuperStruct (8 bytes) at offset 48
+/// - Children (8 bytes) at offset 56 - UFunction へのポインタ (関数用)
+/// - ChildProperties (8 bytes) at offset 64 - FField*/FProperty* へのポインタ (プロパティ用)
+/// - PropertiesSize (4 bytes) at offset 72
+/// - MinAlignment (4 bytes) at offset 76
 #[repr(C)]
+#[derive(Debug)]
 pub struct UStruct {
-    // UField を継承
-    pub super_struct: usize, // UStruct*
-    pub children: usize,     // UField*
-    pub child_properties: usize,
-    pub properties_size: i32,
-    pub min_alignment: i32,
+    pub super_struct: usize,     // UStruct* - 親構造体
+    pub children: usize,         // TObjectPtr<UField> - 関数 (UFunction) リンクリスト
+    pub child_properties: usize, // FField* - プロパティ (FProperty) リンクリスト
+    pub properties_size: i32,    // 全プロパティのサイズ
+    pub min_alignment: i32,      // 最小アラインメント
 }
 
 impl UStruct {
+    /// UStruct 部分の開始オフセット
+    /// UE5.5 レイアウト:
+    /// - UObjectBase: vtable(8) + ObjectFlags(4) + InternalIndex(4) + Class(8) + Name(8) + Outer(8) = 40 bytes
+    /// - UField::Next: 8 bytes → total 48 bytes
+    /// - FStructBaseChain (条件付き): StructBaseChainArray(8) + NumStructBasesInChainMinusOne(4) + padding(4) = 16 bytes → total 64 bytes
+    /// - SuperStruct, Children, ChildProperties, PropertiesSize, MinAlignment
     pub fn read(handle: HANDLE, address: usize) -> Result<Self, anyhow::Error> {
-        // UObject のサイズを飛ばして UStruct 部分を読む
-        let offset = std::mem::size_of::<UObject>();
-        let data = read_process_memory(handle, address + offset, std::mem::size_of::<Self>())?;
-        Ok(unsafe { std::ptr::read(data.as_ptr() as *const Self) })
+        // 複数のオフセットを試す
+        // FStructBaseChain が有効な場合: 64
+        // FStructBaseChain が無効な場合: 48
+        for offset in [64usize, 48, 56, 72] {
+            if let Ok(data) = read_process_memory(handle, address + offset, 32) {
+                let super_struct = usize::from_le_bytes(data[0..8].try_into().unwrap());
+                let children = usize::from_le_bytes(data[8..16].try_into().unwrap());
+                let child_properties = usize::from_le_bytes(data[16..24].try_into().unwrap());
+                let properties_size = i32::from_le_bytes(data[24..28].try_into().unwrap());
+                let min_alignment = i32::from_le_bytes(data[28..32].try_into().unwrap());
+
+                // 妥当性チェック: properties_size と min_alignment が合理的な値か
+                // min_alignment は 0 の場合もある（デフォルト/未設定）
+                if properties_size >= 0 && properties_size < 0x100000
+                    && min_alignment >= 0 && min_alignment <= 16
+                {
+                    // super_struct がヒープポインタっぽいか、0か
+                    let super_valid = super_struct == 0
+                        || (super_struct > 0x10000 && super_struct < 0x7FFFFFFFFFFF);
+
+                    if super_valid {
+                        return Ok(Self {
+                            super_struct,
+                            children,
+                            child_properties,
+                            properties_size,
+                            min_alignment,
+                        });
+                    }
+                }
+            }
+        }
+
+        // フォールバック: オフセット 48 を使用
+        let offset = 48;
+        let data = read_process_memory(handle, address + offset, 32)?;
+        Ok(Self {
+            super_struct: usize::from_le_bytes(data[0..8].try_into().unwrap()),
+            children: usize::from_le_bytes(data[8..16].try_into().unwrap()),
+            child_properties: usize::from_le_bytes(data[16..24].try_into().unwrap()),
+            properties_size: i32::from_le_bytes(data[24..28].try_into().unwrap()),
+            min_alignment: i32::from_le_bytes(data[28..32].try_into().unwrap()),
+        })
+    }
+}
+
+/// FField - UE5 の新しいプロパティ基底クラス (UObject を継承しない)
+/// UE5.5 レイアウト (Field.h より):
+/// - ClassPrivate (8 bytes) - FFieldClass*
+/// - Owner (8 bytes) - FFieldVariant (union of FField* | UObject*, just a pointer)
+/// - Next (8 bytes) - FField*
+/// - NamePrivate (8 bytes) - FName
+/// - FlagsPrivate (4 bytes) - EObjectFlags
+#[repr(C)]
+#[derive(Debug)]
+pub struct FField {
+    pub class_private: usize,    // FFieldClass* - offset 0
+    pub owner: usize,            // FFieldVariant (単なるポインタ) - offset 8
+    pub next: usize,             // FField* - 次のプロパティ - offset 16
+    pub name: FName,             // FName - offset 24
+    pub flags: u32,              // EObjectFlags - offset 32
+}
+
+impl FField {
+    /// FField::Next のオフセット
+    pub const NEXT_OFFSET: usize = 16; // ClassPrivate(8) + Owner(8)
+    /// FField::Name のオフセット
+    pub const NAME_OFFSET: usize = 24; // + Next(8)
+
+    pub fn read(handle: HANDLE, address: usize) -> Result<Self, anyhow::Error> {
+        let data = read_process_memory(handle, address, 40)?;
+        Ok(Self {
+            class_private: usize::from_le_bytes(data[0..8].try_into().unwrap()),
+            owner: usize::from_le_bytes(data[8..16].try_into().unwrap()),
+            next: usize::from_le_bytes(data[16..24].try_into().unwrap()),
+            name: FName {
+                comparison_index: u32::from_le_bytes(data[24..28].try_into().unwrap()),
+                number: u32::from_le_bytes(data[28..32].try_into().unwrap()),
+            },
+            flags: u32::from_le_bytes(data[32..36].try_into().unwrap()),
+        })
     }
 }
 
