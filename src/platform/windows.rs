@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::mem;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+pub use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
 use windows::Win32::System::Diagnostics::Debug::{
     ReadProcessMemory, WriteProcessMemory,
 };

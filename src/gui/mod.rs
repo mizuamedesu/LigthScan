@@ -1,6 +1,7 @@
 pub mod app;
+pub mod engine_view;
 pub mod process_list;
-pub mod scan_view;
 pub mod results_view;
+pub mod scan_view;
 
 pub use app::LightScanApp;

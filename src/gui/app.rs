@@ -1,9 +1,19 @@
-use crate::gui::{process_list::ProcessListView, results_view::ResultsView, scan_view::ScanView};
+use crate::gui::{
+    engine_view::EngineView, process_list::ProcessListView, results_view::ResultsView,
+    scan_view::ScanView,
+};
 use crate::platform::ProcessInfo;
 use crate::scanner::{Process, Scanner};
 use crate::types::{ScanOptions, ScanValue, ValueType};
 use eframe::egui;
 use std::sync::{Arc, Mutex};
+
+/// Main application tabs
+#[derive(PartialEq)]
+enum AppTab {
+    MemoryScan,
+    Engine,
+}
 
 /// Main application state
 pub struct LightScanApp {
@@ -16,7 +26,11 @@ pub struct LightScanApp {
     scan_view: ScanView,
     results_view: ResultsView,
 
+    // Engine abstraction
+    engine_view: EngineView,
+
     // UI state
+    current_tab: AppTab,
     show_process_list: bool,
     error_message: Option<String>,
     status_message: String,
@@ -33,6 +47,8 @@ impl Default for LightScanApp {
             scanner: None,
             scan_view: ScanView::default(),
             results_view: ResultsView::default(),
+            engine_view: EngineView::default(),
+            current_tab: AppTab::MemoryScan,
             show_process_list: false,
             error_message: None,
             status_message: if is_elevated {
@@ -54,21 +70,34 @@ impl LightScanApp {
         match Process::from_info(&process_info) {
             Ok(process) => {
                 self.selected_process = Some(process_info.clone());
+                let process_handle = process.handle_as_usize();
+                let process_id = process_info.pid;
                 self.scanner = Some(Arc::new(Mutex::new(Scanner::new(process))));
-                self.status_message = format!("Process {} ({}) opened successfully",
-                    process_info.name, process_info.pid);
+                self.status_message = format!(
+                    "Process {} ({}) opened successfully",
+                    process_info.name, process_info.pid
+                );
                 self.error_message = None;
                 self.show_process_list = false;
 
                 // Reset scan state
                 self.scan_view.reset();
                 self.results_view.clear();
+
+                // Try to detect and initialize engine
+                self.try_init_engine(process_handle, process_id);
             }
             Err(e) => {
                 self.error_message = Some(format!("Failed to open process: {}", e));
                 self.scanner = None;
             }
         }
+    }
+
+    fn try_init_engine(&mut self, process_handle: usize, process_id: u32) {
+        // Try Unreal Engine first
+        let engine = Box::new(crate::engine::unreal::UnrealEngine::new(process_handle, process_id));
+        self.engine_view.set_engine(engine);
     }
 
     fn perform_first_scan(&mut self) {
@@ -212,6 +241,58 @@ impl LightScanApp {
             ValueType::ByteArray(_) => Err("Byte array input not yet implemented".to_string()),
         }
     }
+
+    fn show_memory_scan_tab(&mut self, ui: &mut egui::Ui) {
+        // Only show scan UI if a process is selected
+        if self.scanner.is_some() {
+            ui.columns(2, |columns| {
+                // Left panel - Scan controls
+                columns[0].vertical(|ui| {
+                    ui.heading("Scan");
+
+                    self.scan_view.ui(ui);
+
+                    ui.separator();
+
+                    // Scan buttons
+                    ui.horizontal(|ui| {
+                        if ui.button("First Scan").clicked() {
+                            self.perform_first_scan();
+                        }
+
+                        if ui.button("Next Scan").clicked() {
+                            self.perform_next_scan();
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        if ui.button("Reset").clicked() {
+                            self.reset_scan();
+                        }
+                    });
+
+                    ui.separator();
+                    ui.label(format!("Results: {}", self.results_view.result_count()));
+                });
+
+                // Right panel - Results
+                columns[1].vertical(|ui| {
+                    ui.heading("Results");
+                    self.results_view.ui(ui, &self.scanner);
+                });
+            });
+        } else {
+            ui.vertical_centered(|ui| {
+                ui.add_space(100.0);
+                ui.heading("No Process Selected");
+                ui.label("Click 'Select Process' to choose a process to scan");
+            });
+        }
+    }
+
+    fn show_engine_tab(&mut self, ui: &mut egui::Ui) {
+        self.engine_view.ui(ui);
+    }
 }
 
 impl eframe::App for LightScanApp {
@@ -313,50 +394,28 @@ impl eframe::App for LightScanApp {
                 ui.separator();
             }
 
-            // Only show scan UI if a process is selected
-            if self.scanner.is_some() {
-                ui.columns(2, |columns| {
-                    // Left panel - Scan controls
-                    columns[0].vertical(|ui| {
-                        ui.heading("Scan");
+            // Tab selector
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(self.current_tab == AppTab::MemoryScan, "Memory Scan")
+                    .clicked()
+                {
+                    self.current_tab = AppTab::MemoryScan;
+                }
+                if ui
+                    .selectable_label(self.current_tab == AppTab::Engine, "Engine Functions")
+                    .clicked()
+                {
+                    self.current_tab = AppTab::Engine;
+                }
+            });
 
-                        self.scan_view.ui(ui);
+            ui.separator();
 
-                        ui.separator();
-
-                        // Scan buttons
-                        ui.horizontal(|ui| {
-                            if ui.button("First Scan").clicked() {
-                                self.perform_first_scan();
-                            }
-
-                            if ui.button("Next Scan").clicked() {
-                                self.perform_next_scan();
-                            }
-                        });
-
-                        ui.horizontal(|ui| {
-                            if ui.button("Reset").clicked() {
-                                self.reset_scan();
-                            }
-                        });
-
-                        ui.separator();
-                        ui.label(format!("Results: {}", self.results_view.result_count()));
-                    });
-
-                    // Right panel - Results
-                    columns[1].vertical(|ui| {
-                        ui.heading("Results");
-                        self.results_view.ui(ui, &self.scanner);
-                    });
-                });
-            } else {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(100.0);
-                    ui.heading("No Process Selected");
-                    ui.label("Click 'Select Process' to choose a process to scan");
-                });
+            // Tab content
+            match self.current_tab {
+                AppTab::MemoryScan => self.show_memory_scan_tab(ui),
+                AppTab::Engine => self.show_engine_tab(ui),
             }
         });
     }

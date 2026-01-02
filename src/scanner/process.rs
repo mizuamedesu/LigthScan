@@ -30,6 +30,11 @@ impl Process {
     pub fn handle(&self) -> HANDLE {
         self.handle
     }
+
+    /// Gets the process handle as usize (for engine abstraction)
+    pub fn handle_as_usize(&self) -> usize {
+        unsafe { std::mem::transmute(self.handle) }
+    }
 }
 
 impl Drop for Process {
